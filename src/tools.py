@@ -2,6 +2,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import json
 import urllib.request
+import urllib.parse
 
 from src.rag import search_guides, ensure_index
 from src.ai_assistant import client, MODEL
@@ -27,21 +28,77 @@ Daily: ${daily:.2f}
 
 def get_weather(city: str) -> str:
     try:
-        safe_city = city.replace(" ", "+")
-        url = f"https://wttr.in/{safe_city}?format=j1"
+        # Step 1: Geocode city
+        geo_url = (
+            "https://geocoding-api.open-meteo.com/v1/search?"
+            + urllib.parse.urlencode(
+                {
+                    "name": city,
+                    "count": 1,
+                    "language": "en",
+                    "format": "json",
+                }
+            )
+        )
 
-        with urllib.request.urlopen(url, timeout=5) as response:
-            data = json.loads(response.read().decode())
+        with urllib.request.urlopen(geo_url, timeout=10) as response:
+            geo_data = json.loads(response.read().decode())
 
-        current = data["current_condition"][0]
-        temp_c = current["temp_C"]
-        temp_f = current["temp_F"]
-        description = current["weatherDesc"][0]["value"]
+        if "results" not in geo_data:
+            return f"Could not find location: {city}"
 
-        return f"{city}: {description}, {temp_c}°C / {temp_f}°F"
+        location = geo_data["results"][0]
+
+        lat = location["latitude"]
+        lon = location["longitude"]
+        location_name = location["name"]
+        country = location.get("country", "")
+
+        # Step 2: Fetch weather
+        weather_url = (
+            "https://api.open-meteo.com/v1/forecast?"
+            + urllib.parse.urlencode(
+                {
+                    "latitude": lat,
+                    "longitude": lon,
+                    "current": "temperature_2m,weather_code",
+                }
+            )
+        )
+
+        with urllib.request.urlopen(weather_url, timeout=10) as response:
+            weather_data = json.loads(response.read().decode())
+
+        current = weather_data["current"]
+
+        temp = current["temperature_2m"]
+        code = current["weather_code"]
+
+        weather_code_map = {
+            0: "☀️ Clear sky",
+            1: "🌤️ Mainly clear",
+            2: "⛅ Partly cloudy",
+            3: "☁️ Overcast",
+            45: "🌫️ Fog",
+            48: "🌫️ Fog",
+            51: "🌧️ Light drizzle",
+            61: "🌧️ Rain",
+            63: "🌧️ Rain",
+            65: "🌧️ Heavy rain",
+            71: "❄️ Snow",
+            80: "🌦️ Rain showers",
+            95: "⛈️ Thunderstorm",
+        }
+
+        description = weather_code_map.get(code, "Unknown conditions")
+
+        return (
+            f"{location_name}, {country}: "
+            f"{description}, {temp}°C"
+        )
 
     except Exception as error:
-        return f"Could not fetch weather for {city}: {error}"
+        return f"Weather error: {type(error).__name__}: {error}"
 
 
 def search_guides_tool(query: str) -> str:
